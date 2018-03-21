@@ -13,8 +13,18 @@ public class Request extends HTTPMessage {
         return path;
     }
 
-    public Request(RequestType type, String path, HTTPVersion version, String content) {
-        super(version, content);
+    public Request(RequestType type, String path, HTTPVersion version) {
+        super(version);
+
+        this.type = type;
+        if (!path.startsWith("/"))
+            path = "/" + path;
+
+        this.path = path;
+    }
+
+    public Request(RequestType type, String path, HTTPVersion version, String content, String contentType) {
+        super(version, content, contentType);
 
         this.type = type;
         if (!path.startsWith("/"))

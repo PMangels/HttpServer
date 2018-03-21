@@ -4,16 +4,17 @@ import http_datastructures.*;
 
 import java.io.*;
 import java.net.Socket;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
-import java.util.regex.PatternSyntaxException;
 
 //TODO: Threadpool??
 class Handler implements Runnable {
@@ -26,100 +27,147 @@ class Handler implements Runnable {
     public Response fetchPage(Request request, File f, boolean headersOnly) throws IOException, IllegalHeaderException{
         if(f.exists() && !f.isDirectory()) {
             String dateString = request.getHeader("if-modified-since");
-            DateTimeFormatter formatter1 = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.ENGLISH);
-            DateTimeFormatter formatter2 = DateTimeFormatter.ofPattern("EEEE, dd-MMM-yy HH:mm:ss zzz", Locale.ENGLISH);
-            DateTimeFormatter formatter3 = DateTimeFormatter.ofPattern("EEE MMM dd HH:mm:ss yyyy", Locale.ENGLISH);
-            long ims;
-            try{
-                ims = LocalDateTime.parse(dateString, formatter1).toEpochSecond(ZoneOffset.UTC);
-            }catch (DateTimeParseException e1){
+            if (dateString != null) {
+                DateTimeFormatter formatter1 = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.ENGLISH);
+                DateTimeFormatter formatter2 = DateTimeFormatter.ofPattern("EEEE, dd-MMM-yy HH:mm:ss zzz", Locale.ENGLISH);
+                DateTimeFormatter formatter3 = DateTimeFormatter.ofPattern("EEE MMM dd HH:mm:ss yyyy", Locale.ENGLISH);
+                long ims;
                 try {
-                    ims = LocalDateTime.parse(dateString, formatter2).toEpochSecond(ZoneOffset.UTC);
-                }catch (DateTimeParseException e2){
+                    ims = LocalDateTime.parse(dateString, formatter1).toEpochSecond(ZoneOffset.UTC);
+                } catch (DateTimeParseException e1) {
                     try {
-                        ims = LocalDateTime.parse(dateString, formatter3).toEpochSecond(ZoneOffset.UTC);
-                    }catch (DateTimeParseException e3){
-                        throw new IllegalHeaderException("if-modified-since: " + request.getHeader("if-modified-since"));
-                    }
+                        ims = LocalDateTime.parse(dateString, formatter2).toEpochSecond(ZoneOffset.UTC);
+                    } catch (DateTimeParseException e2) {
+                        try {
+                            ims = LocalDateTime.parse(dateString, formatter3).toEpochSecond(ZoneOffset.UTC);
+                        } catch (DateTimeParseException e3) {
+                            throw new IllegalHeaderException("if-modified-since: " + request.getHeader("if-modified-since"));
+                        }
 
+                    }
+                }
+                if (f.lastModified() < ims) {
+                    return new Response(request.getVersion(), 304, "Not Modified");
                 }
             }
-            if (f.lastModified() < ims){
-                return new Response(request.getVersion(), 304, "Not Modified", "");
+            String content = new String(Files.readAllBytes(Paths.get(f.getAbsolutePath())));
+            Response response = new Response(request.getVersion(), 200, "OK", content, "text/html");
+            if (headersOnly){
+                String length = response.getHeader("content-length");
+                response.setContent("", response.getHeader("content-type"));
+                response.addHeader("content-length",  length);
             }
-            String content = "";
-            if (!headersOnly)
-                content = new String(Files.readAllBytes(Paths.get(request.getPath())));
-            return new Response(request.getVersion(), 200, "OK", content);
+            return response;
         }else{
-            return new Response(request.getVersion(), 404, "Not Found", "The requested file could not be found on this server.");
+            return new Response(request.getVersion(), 404, "Not Found", "The requested file could not be found on this server.", "text/plain");
         }
     }
 
     public Response getResponse(Request request) throws IOException, IllegalHeaderException {
-        File f = new File(request.getPath());
+
+        if (request.getVersion() == HTTPVersion.HTTP11 && request.getHeader("host") == null)
+            return new Response(HTTPVersion.HTTP11, 400, "Bad Request", "HTTP 1.1 requests must include the Host: header", "text/plain");
+
+        String path = request.getPath();
+        if (path.startsWith("/"))
+            path = path.substring(1);
+
+        String absolutePath = System.getProperty("user.dir") + "/public_html/" + path;
+        File f = new File(absolutePath);
 
         switch (request.getType()){
             case GET:
                 return fetchPage(request, f, false);
             case POST:
                 if (f.isDirectory()) {
-                    return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to.");
+                    return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to.", "text/plain");
                 }
                 f.createNewFile();
-                try (BufferedWriter output = new BufferedWriter(new FileWriter(request.getPath(), true))) {
+                try (BufferedWriter output = new BufferedWriter(new FileWriter(path, true))) {
                     output.append(request.getContent());
                 }
-                return new Response(request.getVersion(), 200, "OK", "");
+                return new Response(request.getVersion(), 200, "OK");
             case PUT:
                 if (f.isDirectory()) {
-                    return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to.");
+                    return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to.", "text/plain");
                 }
                 f.createNewFile();
-                try (BufferedWriter output = new BufferedWriter(new FileWriter(request.getPath(), false))) {
+                try (BufferedWriter output = new BufferedWriter(new FileWriter(path, false))) {
                     output.write(request.getContent());
                 }
-                return new Response(request.getVersion(), 200, "OK", "");
+                return new Response(request.getVersion(), 200, "OK");
             case HEAD:
                 return fetchPage(request, f, true);
             default:
-                return new Response(HTTPVersion.HTTP11, 501, "Not Implemented", "");
+                return new Response(HTTPVersion.HTTP11, 501, "Not Implemented");
         }
+    }
+
+    private int parseRequestLength(String request) throws IllegalHeaderException {
+        for (String line : request.split("\r\n")) {
+            if (line.toLowerCase().startsWith("content-length:")) {
+                String[] lineParts = line.split(":");
+                if (lineParts.length != 2)
+                    throw new IllegalHeaderException(line);
+                try {
+                    return Integer.parseInt(lineParts[1].trim());
+                }catch (NumberFormatException e){
+                    throw new IllegalHeaderException(line);
+                }
+            }
+        }
+        return 0;
     }
 
     @Override
     public void run(){
         try {
-            BufferedReader inFromClient = new BufferedReader(new
-                    InputStreamReader(socket.getInputStream()));
-            DataOutputStream outToClient = new DataOutputStream
-                    (socket.getOutputStream());
+            DataInputStream inFromClient = new DataInputStream(socket.getInputStream());
+            DataOutputStream outToClient = new DataOutputStream(socket.getOutputStream());
+            boolean shouldClose = false;
+            //TODO: check for a timeout
+            while (!shouldClose) {
+                Response response;
+                try {
+                    StringBuilder requestBuffer = new StringBuilder();
 
-            String line = inFromClient.readLine();
-            StringBuilder requestBuffer = new StringBuilder(line+"\r\n");
-            String lastLine = "";
-            while (!(line.isEmpty() && lastLine.isEmpty())) {
-                line = inFromClient.readLine();
-                requestBuffer.append(line + "\r\n");
-                lastLine = line;
-            }
-            Response response;
-            try {
-                Request request = new Request(requestBuffer.toString());
-                response = getResponse(request);
-            }catch (IllegalHeaderException e){
-                response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "Your HTTP request headers were malformed and could not be parsed. Error produced on line: " + e.getLine());
-            }catch (IllegalRequestException e){
-                response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "Your request was not a valid HTTP request and could not be parsed.");
-            }catch (UnsupportedHTTPVersionException e){
-                response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "The provided HTTP version is not supported by this server.");
-            }catch (UnsupportedHTTPCommandException e){
-                response = new Response(HTTPVersion.HTTP11, 501, "Not Implemented", "");
-            }catch (Throwable e){
-                response = new Response(HTTPVersion.HTTP11, 500, "Server Error", "An internal server error occurred while processing your request. Please try again.");
+                    while (!requestBuffer.toString().endsWith("\r\n\r\n")) {
+                        requestBuffer.append((char) inFromClient.readByte());
+                    }
+
+                    int length = parseRequestLength(requestBuffer.toString());
+
+                    int byteCount = 0;
+                    byte[] bytes = new byte[length];
+                    while (byteCount != length) {
+                        byteCount += inFromClient.read(bytes, byteCount, length - byteCount);
+                    }
+                    Request request = new Request(requestBuffer.toString());
+                    response = getResponse(request);
+                    if ("close".equals(request.getHeader("connection")) || request.getVersion() == HTTPVersion.HTTP10) {
+                        shouldClose = true;
+                    }
+                } catch (IllegalHeaderException e) {
+                    response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "Your HTTP request headers were malformed and could not be parsed. Error produced on line: " + e.getLine(), "text/plain");
+                } catch (IllegalRequestException e) {
+                    response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "Your request was not a valid HTTP request and could not be parsed.", "text/plain");
+                } catch (UnsupportedHTTPVersionException e) {
+                    response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "The provided HTTP version is not supported by this server.", "text/plain");
+                } catch (UnsupportedHTTPCommandException e) {
+                    response = new Response(HTTPVersion.HTTP11, 501, "Not Implemented");
+                }catch (SocketTimeoutException | SocketException | EOFException e){
+                    break;
+                }
+                catch (Throwable e) {
+                    response = new Response(HTTPVersion.HTTP11, 500, "Server Error", "An internal server error occurred while processing your request. Please try again.", "text/plain");
+                }
+                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.ENGLISH);
+                response.addHeader("Date", ZonedDateTime.now(ZoneId.of("GMT")).format(formatter));
+                System.out.println(response.toString());
+                outToClient.writeBytes(response.toString());
             }
 
-            // Get the right response and write it to the server.
+            socket.close();
 
         }catch (Throwable exception){
             exception.printStackTrace();

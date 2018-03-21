@@ -11,6 +11,7 @@ class TCPServer
         {
             Socket connectionSocket = welcomeSocket.accept();
             if (connectionSocket != null) {
+                connectionSocket.setSoTimeout(60000);
                 Handler h = new Handler(connectionSocket);
                 Thread thread = new Thread(h);
                 thread.start();
