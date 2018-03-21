@@ -14,10 +14,17 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 
 //TODO: Threadpool??
 class Handler implements Runnable {
+    private static final List<String> imageExtensions = Arrays.asList("jpeg", "jpg","png", "bmp", "wbmp", "gif");
+    private static final List<String> textExtensions = Arrays.asList("txt", "html", "js", "css");
+
+
+
     Socket socket;
 
     public Handler(Socket socket) {
@@ -51,7 +58,25 @@ class Handler implements Runnable {
                 }
             }
             String content = new String(Files.readAllBytes(Paths.get(f.getAbsolutePath())));
-            Response response = new Response(request.getVersion(), 200, "OK", content, "text/html");
+            String contentType = "undefined";
+            String extension = parseExtension(f.getName());
+            if(imageExtensions.contains(extension)){
+                contentType = "image/"+extension;
+            }else if (textExtensions.contains(extension)) {
+                switch (extension) {
+                    case "txt":
+                        contentType = "text/plain";
+                        break;
+                    case "js":
+                        contentType = "text/javascript";
+                        break;
+                    default:
+                        contentType = "text/" + extension;
+                        break;
+                }
+            }
+
+            Response response = new Response(request.getVersion(), 200, "OK", content, contentType);
             if (headersOnly){
                 String length = response.getHeader("content-length");
                 response.setContent("", response.getHeader("content-type"));
@@ -63,6 +88,25 @@ class Handler implements Runnable {
         }
     }
 
+    public String parseExtension(String path){
+        String filename;
+        try {
+            String[] pathSplit = path.split("/");
+            filename = pathSplit[pathSplit.length - 1];
+        } catch (IndexOutOfBoundsException e){
+            filename = path;
+        }
+        if (filename.contains(".")){
+            try {
+                String[] filenameSplit = filename.split("\\.");
+                return filenameSplit[filenameSplit.length - 1].toLowerCase();
+            } catch (IndexOutOfBoundsException e){
+                return  "";
+            }
+        } else {
+            return  "";
+        }
+    }
     public Response getResponse(Request request) throws IOException, IllegalHeaderException {
 
         if (request.getVersion() == HTTPVersion.HTTP11 && request.getHeader("host") == null)
@@ -82,9 +126,12 @@ class Handler implements Runnable {
                 if (f.isDirectory()) {
                     return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to.", "text/plain");
                 }
-                f.createNewFile();
+                String writingContent = request.getContent();
+                if(!f.createNewFile()){
+                    writingContent = "\r\n"+writingContent;
+                }
                 try (BufferedWriter output = new BufferedWriter(new FileWriter(absolutePath, true))) {
-                    output.append("\r\n"+request.getContent());
+                    output.append(writingContent);
                 }
                 return new Response(request.getVersion(), 200, "OK");
             case PUT:
