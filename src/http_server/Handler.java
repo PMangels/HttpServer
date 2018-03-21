@@ -83,8 +83,8 @@ class Handler implements Runnable {
                     return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to.", "text/plain");
                 }
                 f.createNewFile();
-                try (BufferedWriter output = new BufferedWriter(new FileWriter(path, true))) {
-                    output.append(request.getContent());
+                try (BufferedWriter output = new BufferedWriter(new FileWriter(absolutePath, true))) {
+                    output.append("\r\n"+request.getContent());
                 }
                 return new Response(request.getVersion(), 200, "OK");
             case PUT:
@@ -92,7 +92,7 @@ class Handler implements Runnable {
                     return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to.", "text/plain");
                 }
                 f.createNewFile();
-                try (BufferedWriter output = new BufferedWriter(new FileWriter(path, false))) {
+                try (BufferedWriter output = new BufferedWriter(new FileWriter(absolutePath, false))) {
                     output.write(request.getContent());
                 }
                 return new Response(request.getVersion(), 200, "OK");
@@ -142,6 +142,8 @@ class Handler implements Runnable {
                     while (byteCount != length) {
                         byteCount += inFromClient.read(bytes, byteCount, length - byteCount);
                     }
+                    String byteString = new String(bytes,"UTF-8");
+                    requestBuffer.append(byteString);
                     Request request = new Request(requestBuffer.toString());
                     response = getResponse(request);
                     if ("close".equals(request.getHeader("connection")) || request.getVersion() == HTTPVersion.HTTP10) {
