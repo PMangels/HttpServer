@@ -2,10 +2,13 @@ package http_server;
 
 import http_datastructures.*;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
@@ -15,8 +18,11 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
+
+import static java.util.Base64.getDecoder;
 
 //TODO: Threadpool??
 class Handler implements Runnable {
@@ -62,26 +68,54 @@ class Handler implements Runnable {
                         shouldClose = true;
                     }
                 } catch (IllegalHeaderException e) {
-                    response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "Your HTTP request headers were malformed and could not be parsed. Error produced on line: " + e.getLine(), "text/plain");
+                    response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "Your HTTP request headers were malformed and could not be parsed. Error produced on line: " + e.getLine() +"\r\n" , "text/plain");
                 } catch (IllegalRequestException e) {
-                    response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "Your request was not a valid HTTP request and could not be parsed.", "text/plain");
+                    response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "Your request was not a valid HTTP request and could not be parsed."+"\r\n", "text/plain");
                 } catch (UnsupportedHTTPVersionException e) {
-                    response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "The provided HTTP version is not supported by this server.", "text/plain");
+                    response = new Response(HTTPVersion.HTTP11, 400, "Bad Request", "The provided HTTP version is not supported by this server."+"\r\n", "text/plain");
                 } catch (UnsupportedHTTPCommandException e) {
                     response = new Response(HTTPVersion.HTTP11, 501, "Not Implemented");
                 }catch (SocketTimeoutException | SocketException | EOFException e){
                     break;
                 }
                 catch (Throwable e) {
-                    response = new Response(HTTPVersion.HTTP11, 500, "Server Error", "An internal server error occurred while processing your request. Please try again.", "text/plain");
+                    response = new Response(HTTPVersion.HTTP11, 500, "Server Error", "An internal server error occurred while processing your request. Please try again."+"\r\n", "text/plain");
                 }
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.ENGLISH);
                 response.addHeader("Date", ZonedDateTime.now(ZoneId.of("GMT")).format(formatter));
-                System.out.println(response.toString());
+                if (response.hasHeader("content-type")&& response.getHeader("content-type").contains("image"))  {
+                        String extension = parseExtension(response.getHeader("content-type").replace("/", "\\."));
+                        byte[] bytes = getDecoder().decode(response.getContent().getBytes(StandardCharsets.UTF_8));
+                        String byteString = new String(bytes);
+                        response.setContent(byteString,"image/"+extension);
+                        response.addHeader("content-length",String.valueOf(response.getContent().length()));
+//                        BufferedImage bufferedImage;
+//                        ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(byteString);
+//                        bufferedImage = ImageIO.read(byteArrayInputStream);
+////                        int size = Integer.parseInt(response.getHeaders().get("content-length"));
+//                        byte[] outputArray;
+//                        if (bufferedImage != null) {
+//                            ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+//                            ImageIO.write(bufferedImage, extension, byteArrayOutputStream);
+//                            outputArray = byteArrayOutputStream.toByteArray();
+//                            String outputString = new String(outputArray);
+//                            outToClient.writeBytes(outputString);
+//                            outToClient.flush();
+//                            while (outputArray.length != size){
+//                                byte[] extraArray = byteArrayOutputStream.toByteArray();
+//                                byte[] newOutputArray = new byte[outputArray.length+extraArray.length];
+//                                System.arraycopy(outputArray, 0, newOutputArray, 0, outputArray.length);
+//                                System.arraycopy(extraArray, 0, newOutputArray, outputArray.length, extraArray.length);
+//                                System.arraycopy(newOutputArray,0,outputArray,0,newOutputArray.length);
+//                            }
+
+                }
                 outToClient.writeBytes(response.toString());
+                System.out.println(response.toString());
             }
 
             socket.close();
+            System.out.println("Socket closed.");
 
         }catch (Throwable exception){
             exception.printStackTrace();
@@ -91,7 +125,7 @@ class Handler implements Runnable {
     public Response getResponse(Request request) throws IOException, IllegalHeaderException {
 
         if (request.getVersion() == HTTPVersion.HTTP11 && request.getHeader("host") == null)
-            return new Response(HTTPVersion.HTTP11, 400, "Bad Request", "HTTP 1.1 requests must include the Host: header", "text/plain");
+            return new Response(HTTPVersion.HTTP11, 400, "Bad Request", "HTTP 1.1 requests must include the Host: header"+"\r\n", "text/plain");
 
         String path = request.getPath();
         if (path.startsWith("/"))
@@ -111,7 +145,7 @@ class Handler implements Runnable {
                 return fetchPage(request, f, false);
             case POST:
                 if (f.isDirectory()) {
-                    return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to.", "text/plain");
+                    return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to."+"\r\n", "text/plain");
                 }
                 String writingContent = request.getContent();
                 if(!f.createNewFile()){
@@ -123,7 +157,7 @@ class Handler implements Runnable {
                 return new Response(request.getVersion(), 200, "OK");
             case PUT:
                 if (f.isDirectory()) {
-                    return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to.", "text/plain");
+                    return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to."+"\r\n", "text/plain");
                 }
                 f.createNewFile();
                 try (BufferedWriter output = new BufferedWriter(new FileWriter(absolutePath, false))) {
@@ -163,22 +197,26 @@ class Handler implements Runnable {
                     return new Response(request.getVersion(), 304, "Not Modified");
                 }
             }
-            String content = new String(Files.readAllBytes(Paths.get(f.getAbsolutePath())));
+            String content;
             String contentType = "undefined";
             String extension = parseExtension(f.getName());
             if(imageExtensions.contains(extension)){
-                contentType = "image/"+extension;
-            }else if (textExtensions.contains(extension)) {
-                switch (extension) {
-                    case "txt":
-                        contentType = "text/plain";
-                        break;
-                    case "js":
-                        contentType = "text/javascript";
-                        break;
-                    default:
-                        contentType = "text/" + extension;
-                        break;
+                contentType = "image/"+extension+"; charset=utf-8";
+                content = new String(Base64.getEncoder().encode(Files.readAllBytes(Paths.get(f.getAbsolutePath()))));
+            }else {
+                content = new String(Files.readAllBytes(Paths.get(f.getAbsolutePath())));
+                if (textExtensions.contains(extension)) {
+                    switch (extension) {
+                        case "txt":
+                            contentType = "text/plain"+"; charset=utf-8";
+                            break;
+                        case "js":
+                            contentType = "text/javascript"+"; charset=utf-8";
+                            break;
+                        default:
+                            contentType = "text/" + extension+"; charset=utf-8";
+                            break;
+                    }
                 }
             }
 
@@ -190,7 +228,7 @@ class Handler implements Runnable {
             }
             return response;
         }else{
-            return new Response(request.getVersion(), 404, "Not Found", "The requested file could not be found on this server.", "text/plain");
+            return new Response(request.getVersion(), 404, "Not Found", "The requested file could not be found on this server."+"\r\n", "text/plain");
         }
     }
 
