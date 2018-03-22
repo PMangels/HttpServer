@@ -36,7 +36,6 @@ public class Request extends HTTPMessage {
             path = "/" + path;
 
         this.path = path;
-        this.firstLine = type.toString()+ " " + path + " " + version.toString();
     }
 
     /**
@@ -57,7 +56,6 @@ public class Request extends HTTPMessage {
             path = "/" + path;
 
         this.path = path;
-        this.firstLine = type.toString()+ " " + path + " " + version.toString();
     }
 
     /**
@@ -95,16 +93,10 @@ public class Request extends HTTPMessage {
 
     }
 
-    /**
-     * Returns this request as a HTTP request string.
-     * @return The HTTP request string for this request.
-     */
     @Override
     public String toString() {
-        String terminationString = "\r\n\r\n";
-        if (this.getContent().isEmpty())
-            terminationString = "";
-        this.setTerminationString(terminationString);
+        this.firstLine = this.type.typeString + " " + this.path + " " + this.version.versionString;
         return super.toString();
     }
+
 }

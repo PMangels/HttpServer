@@ -3,10 +3,7 @@ package http_server;
 import http_datastructures.*;
 
 import java.io.*;
-import java.net.Socket;
-import java.net.SocketException;
-import java.net.SocketTimeoutException;
-import java.nio.charset.StandardCharsets;
+import java.net.*;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
@@ -99,44 +96,27 @@ class Handler implements Runnable {
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.ENGLISH);
                 response.addHeader("Date", ZonedDateTime.now(ZoneId.of("GMT")).format(formatter));
                 if (response.hasHeader("content-type")&& response.getHeader("content-type").contains("image"))  {
-                    String extension = parseExtension(response.getHeader("content-type").replace("/", "\\."));
-                    byte[] bytes = getDecoder().decode(response.getContent().getBytes(StandardCharsets.UTF_8));
-                    String byteString = new String(bytes);
-                    response.setContent(byteString,"image/"+extension);
-                    response.addHeader("content-length",String.valueOf(response.getContent().length()));
-//                        BufferedImage bufferedImage;
-//                        ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(byteString);
-//                        bufferedImage = ImageIO.read(byteArrayInputStream);
-////                        int size = Integer.parseInt(response.getHeaders().get("content-length"));
-//                        byte[] outputArray;
-//                        if (bufferedImage != null) {
-//                            ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-//                            ImageIO.write(bufferedImage, extension, byteArrayOutputStream);
-//                            outputArray = byteArrayOutputStream.toByteArray();
-//                            String outputString = new String(outputArray);
-//                            outToClient.writeBytes(outputString);
-//                            outToClient.flush();
-//                            while (outputArray.length != size){
-//                                byte[] extraArray = byteArrayOutputStream.toByteArray();
-//                                byte[] newOutputArray = new byte[outputArray.length+extraArray.length];
-//                                System.arraycopy(outputArray, 0, newOutputArray, 0, outputArray.length);
-//                                System.arraycopy(extraArray, 0, newOutputArray, outputArray.length, extraArray.length);
-//                                System.arraycopy(newOutputArray,0,outputArray,0,newOutputArray.length);
-//                            }
-
+                    byte[] bytes = getDecoder().decode(response.getContent().getBytes());
+                    response.addHeader("content-length", String.valueOf(bytes.length));
+                    outToClient.writeBytes(response.getVersion().toString() + " " + response.getStatusCode() + " " + response.getStatus() + "\r\n");
+                    outToClient.writeBytes(response.headerString());
+                    outToClient.writeBytes("\r\n");
+                    outToClient.write(bytes, 0, bytes.length);
+                }else {
+                    System.out.println(response.toString());
+                    outToClient.writeBytes(response.toString());
                 }
-                System.out.println(response.toString());
-                outToClient.writeBytes(response.toString());
             }
 
             socket.close();
+            System.out.println("Socket was closed.");
 
         }catch (Throwable exception){
             exception.printStackTrace();
         }
     }
 
-    private Response getResponse(Request request) throws IOException, IllegalHeaderException {
+    private Response getResponse(Request request) throws IOException, IllegalHeaderException, IllegalRequestException {
 
         if (request.getVersion() == HTTPVersion.HTTP11 && request.getHeader("host") == null)
             return new Response(HTTPVersion.HTTP11, 400, "Bad Request", "HTTP 1.1 requests must include the Host: header\r\n", "text/plain");
@@ -144,6 +124,13 @@ class Handler implements Runnable {
         String path = request.getPath();
         if (path.startsWith("/"))
             path = path.substring(1);
+        if (path.startsWith("http://")) {
+            try {
+                path = new URI(path).getPath();
+            } catch (URISyntaxException e) {
+                throw new IllegalRequestException();
+            }
+        }
 
         if (path.isEmpty() && HTTPVersion.HTTP11.equals(request.getVersion())){
             Response response = new Response(request.getVersion(),303,"See Other");
@@ -168,17 +155,14 @@ class Handler implements Runnable {
                 try (BufferedWriter output = new BufferedWriter(new FileWriter(absolutePath, true))) {
                     output.append(writingContent);
                 }
-                try (BufferedWriter output = new BufferedWriter(new FileWriter(path, true))) {
-                    output.append(request.getContent());
-                }
                 return new Response(request.getVersion(), 200, "OK");
             case PUT:
                 if (f.isDirectory()) {
                     return new Response(request.getVersion(), 400, "Bad Request", "The requested file could not be written to.\r\n", "text/plain");
                 }
                 f.createNewFile();
-                try (BufferedWriter output = new BufferedWriter(new FileWriter(path, false))) {
-                    output.write(request.getContent());
+                try (BufferedWriter output = new BufferedWriter(new FileWriter(absolutePath, false))) {
+                    output.append(request.getContent());
                 }
                 return new Response(request.getVersion(), 200, "OK");
             case HEAD:
@@ -190,7 +174,17 @@ class Handler implements Runnable {
 
     public Response fetchPage(Request request, File f, boolean headersOnly) throws IOException, IllegalHeaderException{
         if(f.exists() && !f.isDirectory()) {
-            String dateString = request.getHeader("if-modified-since");
+            boolean unModified = false;
+            String dateString = null;
+            String modifiedString = request.getHeader("if-modified-since");
+            String unModifiedString = request.getHeader("if-unmodified-since");
+            if (unModifiedString != null){
+                dateString = unModifiedString;
+                unModified = true;
+            }
+            if (modifiedString != null){
+                dateString = modifiedString;
+            }
             if (dateString != null) {
                 DateTimeFormatter formatter1 = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.ENGLISH);
                 DateTimeFormatter formatter2 = DateTimeFormatter.ofPattern("EEEE, dd-MMM-yy HH:mm:ss zzz", Locale.ENGLISH);
@@ -205,13 +199,19 @@ class Handler implements Runnable {
                         try {
                             ims = LocalDateTime.parse(dateString, formatter3).toEpochSecond(ZoneOffset.UTC);
                         } catch (DateTimeParseException e3) {
-                            throw new IllegalHeaderException("if-modified-since: " + request.getHeader("if-modified-since"));
+                            String headerKey = "if-modified-since";
+                            if (unModified){
+                                headerKey = "if-unmodified-since";
+                            }
+                            throw new IllegalHeaderException(headerKey + ": " + request.getHeader(headerKey));
                         }
 
                     }
                 }
-                if (f.lastModified() < ims) {
+                if (f.lastModified()/1000 < ims && !unModified) {
                     return new Response(request.getVersion(), 304, "Not Modified");
+                }else if (f.lastModified()/1000 > ims && unModified){
+                    return new Response(request.getVersion(), 412, "Precondition Failed");
                 }
             }
             String content;

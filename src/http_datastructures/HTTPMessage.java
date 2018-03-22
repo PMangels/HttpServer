@@ -13,15 +13,6 @@ public class HTTPMessage {
     HTTPVersion version;
     private Map<String, String> headers = new HashMap<>();
     String firstLine;
-    private String terminationString = "";
-
-    public String getTerminationString() {
-        return terminationString;
-    }
-
-    public void setTerminationString(String terminationString) {
-        this.terminationString = terminationString;
-    }
 
     /**
      * Get the headers for this message.
@@ -145,7 +136,7 @@ public class HTTPMessage {
      */
     @Override
     public String toString() {
-        return firstLine + "\r\n" + headerString() + "\r\n" + content + this.getTerminationString();
+        return firstLine + "\r\n" + headerString() + "\r\n" + content;
     }
 
     /**

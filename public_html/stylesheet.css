@@ -1,0 +1,13 @@
+h1{
+    color: green;
+}
+
+p{
+    font-size: 100px;
+}
+
+button{
+    width: 100px;
+    height: 100px;
+    background-color: crimson;
+}
