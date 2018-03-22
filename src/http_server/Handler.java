@@ -16,7 +16,6 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
 
-//TODO: Threadpool??
 class Handler implements Runnable {
     Socket socket;
 
@@ -63,7 +62,7 @@ class Handler implements Runnable {
         }
     }
 
-    public Response getResponse(Request request) throws IOException, IllegalHeaderException {
+    private Response getResponse(Request request) throws IOException, IllegalHeaderException {
 
         if (request.getVersion() == HTTPVersion.HTTP11 && request.getHeader("host") == null)
             return new Response(HTTPVersion.HTTP11, 400, "Bad Request", "HTTP 1.1 requests must include the Host: header", "text/plain");
@@ -102,30 +101,17 @@ class Handler implements Runnable {
                 return new Response(HTTPVersion.HTTP11, 501, "Not Implemented");
         }
     }
-
+/*
     private int parseRequestLength(String request) throws IllegalHeaderException {
-        for (String line : request.split("\r\n")) {
-            if (line.toLowerCase().startsWith("content-length:")) {
-                String[] lineParts = line.split(":");
-                if (lineParts.length != 2)
-                    throw new IllegalHeaderException(line);
-                try {
-                    return Integer.parseInt(lineParts[1].trim());
-                }catch (NumberFormatException e){
-                    throw new IllegalHeaderException(line);
-                }
-            }
-        }
-        return 0;
-    }
 
+    }
+*/
     @Override
     public void run(){
         try {
             DataInputStream inFromClient = new DataInputStream(socket.getInputStream());
             DataOutputStream outToClient = new DataOutputStream(socket.getOutputStream());
             boolean shouldClose = false;
-            //TODO: check for a timeout
             while (!shouldClose) {
                 Response response;
                 try {
@@ -135,13 +121,36 @@ class Handler implements Runnable {
                         requestBuffer.append((char) inFromClient.readByte());
                     }
 
-                    int length = parseRequestLength(requestBuffer.toString());
-
-                    int byteCount = 0;
-                    byte[] bytes = new byte[length];
-                    while (byteCount != length) {
-                        byteCount += inFromClient.read(bytes, byteCount, length - byteCount);
+                    int length = 0;
+                    boolean chunked= false;
+                    for (String line : requestBuffer.toString().split("\r\n")) {
+                        if (line.toLowerCase().startsWith("content-length:")) {
+                            String[] lineParts = line.split(":");
+                            if (lineParts.length != 2)
+                                throw new IllegalHeaderException(line);
+                            try {
+                                length = Integer.parseInt(lineParts[1].trim());
+                            }catch (NumberFormatException e){
+                                throw new IllegalHeaderException(line);
+                            }
+                        }
+                        if (line.toLowerCase().startsWith("transfer-encoding:") && line.toLowerCase().contains("chunked")){
+                            chunked = true;
+                        }
                     }
+
+                    byte[] bytes;
+                    if (chunked){
+                        bytes = parseBodyChunked(inFromClient);
+                        do{
+                            requestBuffer.insert(requestBuffer.length()-2,(char) inFromClient.readByte());
+                        }while (!requestBuffer.toString().endsWith("\r\n\r\n\r\n"));
+                        requestBuffer.delete(requestBuffer.length()-2,requestBuffer.length());
+                    }else{
+                        bytes = parseBody(inFromClient, length);
+                    }
+
+                    requestBuffer.append(new String(bytes, "UTF-8"));
                     Request request = new Request(requestBuffer.toString());
                     response = getResponse(request);
                     if ("close".equals(request.getHeader("connection")) || request.getVersion() == HTTPVersion.HTTP10) {
@@ -172,5 +181,33 @@ class Handler implements Runnable {
         }catch (Throwable exception){
             exception.printStackTrace();
         }
+    }
+
+    private byte[] parseBodyChunked(DataInputStream inputStream) throws IOException {
+        int length = -1;
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        while (length != 0){
+            StringBuilder responseBuffer = new StringBuilder();
+            while (!responseBuffer.toString().endsWith("\r\n")) {
+                responseBuffer.append((char) inputStream.readByte());
+            }
+            String[] firstline = responseBuffer.toString().split(";");
+            length = Integer.parseInt(firstline[0].replace("\r\n",""), 16);
+            buffer.write(parseBody(inputStream, length));
+            if (length!=0) {
+                inputStream.readByte();
+                inputStream.readByte();
+            }
+        }
+        return buffer.toByteArray();
+    }
+
+    private byte[] parseBody(DataInputStream inputStream, int length) throws IOException {
+        int byteCount = 0;
+        byte[] bytes = new byte[length];
+        while (byteCount != length) {
+            byteCount += inputStream.read(bytes, byteCount, length - byteCount);
+        }
+        return bytes;
     }
 }

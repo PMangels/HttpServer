@@ -1,5 +1,8 @@
 package http_datastructures;
 
+/**
+ * Defines different
+ */
 public enum HttpContentType {
     UNDEFINED("Undefined"), IMAGE("Image");
 
