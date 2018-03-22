@@ -62,7 +62,10 @@ public class Request extends HTTPMessage {
 
     @Override
     public String toString() {
-        this.firstLine = this.type.typeString + " " + this.path + " " + this.getVersion().versionString;
+        String terminationString = "\r\n\r\n";
+        if (this.getContent().isEmpty())
+            terminationString = "";
+        this.setTerminationString(terminationString);
         return super.toString();
     }
 }
