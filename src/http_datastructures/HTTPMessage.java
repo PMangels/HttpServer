@@ -106,6 +106,7 @@ public class HTTPMessage {
      * @throws IllegalHeaderException When the headers in the raw message are malformed and could not be parsed.
      */
     HTTPMessage(String rawMessage) throws IllegalHeaderException {
+        // Split headers and body
         String[] parts = rawMessage.split("\r\n\r\n", 2);
         if (parts.length == 2){
             this.content = parts[1];
@@ -114,6 +115,7 @@ public class HTTPMessage {
         String[] headerParts = parts[0].split("\r\n", 2);
         this.firstLine = headerParts[0];
 
+        // Parse the headers
         if (headerParts.length > 1) {
             String lastHeader = "";
             for (String line : headerParts[1].split("\r\n")) {

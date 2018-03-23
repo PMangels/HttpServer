@@ -45,17 +45,21 @@ class Handler implements Runnable {
             DataInputStream inFromClient = new DataInputStream(socket.getInputStream());
             DataOutputStream outToClient = new DataOutputStream(socket.getOutputStream());
             boolean shouldClose = false;
+
             while (!shouldClose) {
                 Response response;
                 try {
                     StringBuilder requestBuffer = new StringBuilder();
 
+                    // Read all headers
                     while (!requestBuffer.toString().endsWith("\r\n\r\n")) {
                         requestBuffer.append((char) inFromClient.readByte());
                     }
 
                     int length = 0;
-                    boolean chunked= false;
+                    boolean chunked = false;
+
+                    // Look for relevant headers: content-length, transfer-encoding.
                     for (String line : requestBuffer.toString().split("\r\n")) {
                         if (line.toLowerCase().startsWith("content-length:")) {
                             String[] lineParts = line.split(":");
@@ -72,8 +76,10 @@ class Handler implements Runnable {
                         }
                     }
 
+                    // Retrieve the request body
                     byte[] bytes;
                     if (chunked){
+                        // Use chunked transfer encoding to retrieve request body.
                         bytes = readBodyChunked(inFromClient);
                         do{
                             requestBuffer.insert(requestBuffer.length()-2,(char) inFromClient.readByte());
@@ -84,8 +90,12 @@ class Handler implements Runnable {
                     }
 
                     requestBuffer.append(new String(bytes, "UTF-8"));
+
+                    // Parse the request and formulate a suited response
                     Request request = new Request(requestBuffer.toString());
                     response = getResponse(request);
+
+                    // Close the connection if required
                     if ("close".equals(request.getHeader("connection")) || request.getVersion() == HTTPVersion.HTTP10) {
                         shouldClose = true;
                     }
@@ -98,14 +108,20 @@ class Handler implements Runnable {
                 } catch (UnsupportedHTTPCommandException e) {
                     response = new Response(HTTPVersion.HTTP11, 501, "Not Implemented");
                 }catch (SocketTimeoutException | SocketException | EOFException e){
+                    // We can no longer read from this socket, close it.
                     break;
                 }
                 catch (Throwable e) {
                     response = new Response(HTTPVersion.HTTP11, 500, "Server Error", "An internal server error occurred while processing your request. Please try again.\r\n", "text/plain");
                 }
+
+                // Add the date header
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.ENGLISH);
                 response.addHeader("Date", ZonedDateTime.now(ZoneId.of("GMT")).format(formatter));
+
+                // Send the response to the client
                 if (response.hasHeader("content-type")&& response.getHeader("content-type").contains("image"))  {
+                    // Send an image file
                     byte[] bytes = getDecoder().decode(response.getContent().getBytes());
                     response.addHeader("content-length", String.valueOf(bytes.length));
                     outToClient.writeBytes(response.getVersion().toString() + " " + response.getStatusCode() + " " + response.getStatus() + "\r\n");
@@ -117,7 +133,7 @@ class Handler implements Runnable {
                     outToClient.writeBytes(response.toString());
                 }
             }
-
+            // End the connection
             socket.close();
             System.out.println("Socket was closed.");
 
@@ -150,6 +166,7 @@ class Handler implements Runnable {
             }
         }
 
+        // Redirect requests for / to index.html
         if (path.isEmpty() && HTTPVersion.HTTP11.equals(request.getVersion())){
             Response response = new Response(request.getVersion(),303,"See Other");
             response.addHeader("Location","/index.html");
@@ -205,6 +222,8 @@ class Handler implements Runnable {
      */
     public Response fetchPage(Request request, File file, boolean headersOnly) throws IOException, IllegalHeaderException{
         if(file.exists() && !file.isDirectory()) {
+
+            // Check for the presence of if-(un)modified-since headers and process them accordingly.
             boolean unModified = false;
             String dateString = null;
             String modifiedString = request.getHeader("if-modified-since");
@@ -245,10 +264,13 @@ class Handler implements Runnable {
                     return new Response(request.getVersion(), 412, "Precondition Failed");
                 }
             }
+
+            // Retrieve file contents
             String content;
             String contentType = "undefined";
             String extension = parseExtension(file.getName());
             if(imageExtensions.contains(extension)){
+                // Retrieve an image
                 contentType = "image/"+extension+"; charset=utf-8";
                 content = new String(Base64.getEncoder().encode(Files.readAllBytes(Paths.get(file.getAbsolutePath()))));
             }else {
@@ -269,6 +291,8 @@ class Handler implements Runnable {
             }
 
             Response response = new Response(request.getVersion(), 200, "OK", content, contentType);
+
+            // Only send headers for a HEAD request
             if (headersOnly){
                 String length = response.getHeader("content-length");
                 response.setContent("", response.getHeader("content-type"));
@@ -316,11 +340,17 @@ class Handler implements Runnable {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         while (length != 0){
             StringBuilder responseBuffer = new StringBuilder();
+
+            // Read the first line
             while (!responseBuffer.toString().endsWith("\r\n")) {
                 responseBuffer.append((char) inputStream.readByte());
             }
+
+            // Retrieve the chunk length
             String[] firstline = responseBuffer.toString().split(";");
             length = Integer.parseInt(firstline[0].replace("\r\n",""), 16);
+
+            // Read the chunk
             buffer.write(readBody(inputStream, length));
             if (length!=0) {
                 inputStream.readByte();
