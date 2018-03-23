@@ -1,3 +1,3 @@
 function popAlert() {
-    alert("Javascript is loaded!!");
+    alert("External javascript is loaded!!");
 }
