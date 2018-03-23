@@ -93,6 +93,10 @@ public class Request extends HTTPMessage {
 
     }
 
+    /**
+     * Return this request object as a HTTP request string.
+     * @return The HTTP request string representing this request.
+     */
     @Override
     public String toString() {
         this.firstLine = this.type.typeString + " " + this.path + " " + this.version.versionString;
