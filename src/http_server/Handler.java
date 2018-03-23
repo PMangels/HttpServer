@@ -19,16 +19,26 @@ import java.util.Locale;
 
 import static java.util.Base64.getDecoder;
 
+/**
+ * Simple handler class that handles a single HTTP connection.
+ */
 class Handler implements Runnable {
 
     private static final List<String> imageExtensions = Arrays.asList("jpeg", "jpg","png", "bmp", "wbmp", "gif");
     private static final List<String> textExtensions = Arrays.asList("txt", "html", "js", "css");
     Socket socket;
 
+    /**
+     * Initialise a Handler and give it the socket as its socket.
+     * @param socket The socket this class handles.
+     */
     public Handler(Socket socket) {
         this.socket = socket;
     }
 
+    /**
+     * Let's the handler handle the HTTP connection.
+     */
     @Override
     public void run(){
         try {
@@ -64,13 +74,13 @@ class Handler implements Runnable {
 
                     byte[] bytes;
                     if (chunked){
-                        bytes = parseBodyChunked(inFromClient);
+                        bytes = readBodyChunked(inFromClient);
                         do{
                             requestBuffer.insert(requestBuffer.length()-2,(char) inFromClient.readByte());
                         }while (!requestBuffer.toString().endsWith("\r\n\r\n\r\n"));
                         requestBuffer.delete(requestBuffer.length()-2,requestBuffer.length());
                     }else{
-                        bytes = parseBody(inFromClient, length);
+                        bytes = readBody(inFromClient, length);
                     }
 
                     requestBuffer.append(new String(bytes, "UTF-8"));
@@ -116,6 +126,14 @@ class Handler implements Runnable {
         }
     }
 
+    /**
+     * Processes the request and returns a response object of this servers response to that request.
+     * @param request The given request
+     * @return the response from this server.
+     * @throws IOException There is a exception when accessing the file that is requested
+     * @throws IllegalHeaderException The request has an illegal or malformed header
+     * @throws IllegalRequestException The request is illegal or malformed
+     */
     private Response getResponse(Request request) throws IOException, IllegalHeaderException, IllegalRequestException {
 
         if (request.getVersion() == HTTPVersion.HTTP11 && request.getHeader("host") == null)
@@ -172,8 +190,21 @@ class Handler implements Runnable {
         }
     }
 
-    public Response fetchPage(Request request, File f, boolean headersOnly) throws IOException, IllegalHeaderException{
-        if(f.exists() && !f.isDirectory()) {
+    /**
+     * Returns the response with the content of the given file requested by a given request. If headersOnly is true,
+     * only the headers will be included in the response, not the actual content.
+     * @param request The request which asked for this file.
+     * @param file The file we want to fetch
+     * @param headersOnly A boolean to indicate a HEAD request.
+     * @return a Response with it's content the content of the file, except when headersOnly is true - in this case
+     * only the headers are returned without actual content - or when the request has a header "if-modified-since" or
+     * "if-unmodified-since" and the file is not modified since, respectively modified since the given date - then it
+     * will return a response with a statuscode 304 or with a 412 statuscode respectively.
+     * @throws IOException There is a exception when accessing the file that is requested
+     * @throws IllegalHeaderException The request has an illegal or malformed header
+     */
+    public Response fetchPage(Request request, File file, boolean headersOnly) throws IOException, IllegalHeaderException{
+        if(file.exists() && !file.isDirectory()) {
             boolean unModified = false;
             String dateString = null;
             String modifiedString = request.getHeader("if-modified-since");
@@ -208,20 +239,20 @@ class Handler implements Runnable {
 
                     }
                 }
-                if (f.lastModified()/1000 < ims && !unModified) {
+                if (file.lastModified()/1000 < ims && !unModified) {
                     return new Response(request.getVersion(), 304, "Not Modified");
-                }else if (f.lastModified()/1000 > ims && unModified){
+                }else if (file.lastModified()/1000 > ims && unModified){
                     return new Response(request.getVersion(), 412, "Precondition Failed");
                 }
             }
             String content;
             String contentType = "undefined";
-            String extension = parseExtension(f.getName());
+            String extension = parseExtension(file.getName());
             if(imageExtensions.contains(extension)){
                 contentType = "image/"+extension+"; charset=utf-8";
-                content = new String(Base64.getEncoder().encode(Files.readAllBytes(Paths.get(f.getAbsolutePath()))));
+                content = new String(Base64.getEncoder().encode(Files.readAllBytes(Paths.get(file.getAbsolutePath()))));
             }else {
-                content = new String(Files.readAllBytes(Paths.get(f.getAbsolutePath())));
+                content = new String(Files.readAllBytes(Paths.get(file.getAbsolutePath())));
                 if (textExtensions.contains(extension)) {
                     switch (extension) {
                         case "txt":
@@ -249,6 +280,11 @@ class Handler implements Runnable {
         }
     }
 
+    /**
+     * Returns the extension a file with the given path has. If it has no extension an empty string is returned.
+     * @param path The given path
+     * @return The substring behind the last "/" and behind the last "."
+     */
     public String parseExtension(String path){
         String filename;
         try {
@@ -269,7 +305,13 @@ class Handler implements Runnable {
         }
     }
 
-    private byte[] parseBodyChunked(DataInputStream inputStream) throws IOException {
+    /**
+     * This will read the body of a Chunked HTTP message from the given inputStream and returns it in a buffer.
+     * @param inputStream The inputStream from which to read
+     * @return a byte array with the input from a Chunked HTTP message in the inputStream.
+     * @throws IOException Reading from the inputStream failed.
+     */
+    private byte[] readBodyChunked(DataInputStream inputStream) throws IOException {
         int length = -1;
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         while (length != 0){
@@ -279,7 +321,7 @@ class Handler implements Runnable {
             }
             String[] firstline = responseBuffer.toString().split(";");
             length = Integer.parseInt(firstline[0].replace("\r\n",""), 16);
-            buffer.write(parseBody(inputStream, length));
+            buffer.write(readBody(inputStream, length));
             if (length!=0) {
                 inputStream.readByte();
                 inputStream.readByte();
@@ -288,7 +330,14 @@ class Handler implements Runnable {
         return buffer.toByteArray();
     }
 
-    private byte[] parseBody(DataInputStream inputStream, int length) throws IOException {
+    /**
+     * Read from the inputStream for a length "length" and returns it in a byte array.
+     * @param inputStream The inputStream from which to read
+     * @param length The length for which to read
+     * @return a byte array with the input from the inputStream and length "length".
+     * @throws IOException
+     */
+    private byte[] readBody(DataInputStream inputStream, int length) throws IOException {
         int byteCount = 0;
         byte[] bytes = new byte[length];
         while (byteCount != length) {

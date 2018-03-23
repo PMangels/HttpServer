@@ -3,6 +3,9 @@ package http_server;
 import java.net.ServerSocket;
 import java.net.Socket;
 
+/**
+ * Simple HTTP server class. Handles requests multithreaded.
+ */
 class TCPServer
 {
     public static void main(String argv[]) throws Exception {
